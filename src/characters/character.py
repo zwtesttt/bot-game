@@ -224,13 +224,19 @@ class Character(pygame.sprite.Sprite):
             if not self.has_hit_opponent:
                 attack_mid_point = self.attack_duration / 2
                 # 放宽判定窗口，使命中更容易
-                if self.attack_timer > attack_mid_point * 0.5 and self.attack_timer < attack_mid_point * 1.5:
+                if self.attack_timer > attack_mid_point * 0.3 and self.attack_timer < attack_mid_point * 1.7:
                     # 更新攻击判定框
                     self._update_attack_hitbox()
                     
                     # 计算与对手的实际距离
                     distance = abs((self.x + self.width/2) - (opponent.x + opponent.width/2))
-                    max_attack_distance = self.width * 2.0  # 增加最大攻击距离（原为1.2）
+                    
+                    # 为AI角色增大攻击距离
+                    ai_bonus_distance = 0
+                    if hasattr(self, 'name') and self.name.startswith('AI'):
+                        ai_bonus_distance = 50  # AI角色额外攻击距离
+                    
+                    max_attack_distance = self.width * 2.0 + ai_bonus_distance  # 增加最大攻击距离（原为1.2）
                     
                     # 在AI对战AI模式下打印调试信息
                     if hasattr(self, 'name') and self.name.startswith('AI'):
@@ -238,6 +244,34 @@ class Character(pygame.sprite.Sprite):
                         print(f"判定框情况: {self.attack_hitbox}, 对手位置: {opponent.rect}")
                     
                     # 放宽判定条件，使AI更容易命中对手
+                    ai_vs_ai = (hasattr(self, 'name') and self.name.startswith('AI') and 
+                                hasattr(opponent, 'name') and opponent.name.startswith('AI'))
+                                
+                    # AI对战AI时额外放宽判定条件
+                    if ai_vs_ai:
+                        # 在AI对战AI模式下，如果两个AI都在地面上，总是命中
+                        if self.is_on_ground() and opponent.is_on_ground() and distance <= max_attack_distance * 1.2:
+                            # 标记已命中
+                            self.has_hit_opponent = True
+                            
+                            # 应用伤害
+                            damage = 0
+                            if self.state == CharacterState.LIGHT_PUNCH:
+                                damage = 2
+                            elif self.state == CharacterState.HEAVY_PUNCH:
+                                damage = 3
+                            elif self.state == CharacterState.LIGHT_KICK:
+                                damage = 2
+                            elif self.state == CharacterState.HEAVY_KICK:
+                                damage = 4
+                                
+                            # 实际应用伤害
+                            actual_damage = opponent.take_damage(damage)
+                            
+                            print(f"{self.name} AI对战模式强制命中 {opponent.name}! 造成 {actual_damage} 伤害")
+                            return
+                    
+                    # 标准判定逻辑
                     if distance <= max_attack_distance and self.attack_hitbox.colliderect(opponent.rect) and not opponent.is_blocking:
                         # 标记已命中
                         self.has_hit_opponent = True

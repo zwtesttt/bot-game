@@ -173,8 +173,13 @@ class AIController:
         can_attack = self.character.attack_cooldown <= 0
         attack_interval = current_time - self.last_attack_time
         
+        # 强制攻击机制：每10秒必须尝试攻击一次，防止AI永远不攻击的情况
+        force_attack = (attack_interval > 10.0)
+        if force_attack:
+            print(f"{self.character.name} 触发强制攻击机制!")
+        
         # 如果正在重新定位，优先考虑移动和保持距离
-        if self.is_repositioning:
+        if self.is_repositioning and not force_attack:
             # 保持距离，直到定位完成
             direction = 'left' if ai_state['x'] > player_state['x'] else 'right'
             self._execute_action(lambda: self._move(direction), 0.8)
@@ -190,7 +195,7 @@ class AIController:
             return
         
         # 检查是否重叠或距离过近，如果是则先拉开距离
-        if distance < 120:  # 扩大距离检测范围
+        if distance < 120 and not force_attack:  # 扩大距离检测范围
             # 向远离对方的方向移动，更长时间以确保拉开足够距离
             direction = 'left' if ai_state['x'] > player_state['x'] else 'right'
             self._execute_action(lambda: self._move(direction), 1.0)
@@ -201,19 +206,28 @@ class AIController:
         
         # 控制攻击频率和连续攻击次数
         allow_attack = (can_attack and 
-                       attack_interval >= self.min_attack_interval and 
-                       self.attack_count < self.max_consecutive_attacks)
+                       (attack_interval >= self.min_attack_interval or force_attack) and 
+                       (self.attack_count < self.max_consecutive_attacks or force_attack))
                        
-        # 在可以攻击的情况下，使用更低的攻击概率
-        attack_chance = 0.25  # 大幅降低攻击概率（原为0.45）
+        # 在可以攻击的情况下，提高攻击概率
+        # 如果两个AI一段时间没有攻击，增加攻击概率
+        attack_chance = 0.65  # 提高攻击概率（原为0.25）
+        
+        # 如果是AI对战AI模式（根据名称判断），进一步增加攻击概率
+        if hasattr(self.character, 'name') and self.character.name.startswith('AI'):
+            attack_chance += 0.15
+            
+            # 如果双方距离适中，额外增加攻击概率
+            if 120 <= distance <= 220:
+                attack_chance += 0.15
         
         # 根据时间动态调整攻击间隔
-        if attack_interval < self.min_attack_interval * 1.5:
-            attack_chance *= 0.5  # 如果刚过最小间隔不久，进一步降低攻击概率
+        if attack_interval < self.min_attack_interval * 1.5 and not force_attack:
+            attack_chance *= 0.7  # 如果刚过最小间隔不久，减少攻击概率
         
-        # 优先考虑移动和防御，而不是攻击
-        if player_state['is_attacking'] and random.random() < self.defense * 1.5:
-            # 对手正在攻击，有更高的概率防御
+        # 优先考虑防御，但降低优先级，增加攻击机会
+        if player_state['is_attacking'] and random.random() < self.defense * 1.2 and not force_attack:
+            # 对手正在攻击，有一定概率防御
             self._execute_action(self._block, 0.7)
             # 防御后立即安排后续行动，后退或跳跃
             if random.random() < 0.7:
@@ -222,26 +236,47 @@ class AIController:
             return
         
         # 检查是否满足攻击条件并决定是否进行攻击
-        if allow_attack and random.random() < attack_chance:
+        if (allow_attack and random.random() < attack_chance) or force_attack:
             # 接近对手的中距离（不要太近，避免重叠）
             ideal_attack_distance = 150  # 理想攻击距离
             
-            if abs(distance - ideal_attack_distance) > 50:
+            if abs(distance - ideal_attack_distance) > 50 and not force_attack:
                 # 先调整到理想攻击距离
                 direction = 'right' if ai_state['x'] < player_state['x'] - ideal_attack_distance else 'left'
                 self._execute_action(lambda: self._move(direction), 0.5)
                 
-                # 如果有足够的攻击时间间隔，安排攻击
-                if attack_interval >= self.min_attack_interval * 1.2:  # 120%的最小间隔
-                    attack_type = random.choice(['light_punch', 'light_kick'])  # 偏好使用轻型攻击
-                    self.next_action_queue.append((lambda: self._attack(attack_type), 0.4))
+                # 安排攻击
+                # 根据角色个性和随机性选择攻击类型
+                if hasattr(self.character, 'name') and 'AI 1' in self.character.name:
+                    # AI 1偏好拳击
+                    attack_choices = ['light_punch', 'heavy_punch', 'light_punch', 'light_kick']
+                elif hasattr(self.character, 'name') and 'AI 2' in self.character.name:
+                    # AI 2偏好腿法
+                    attack_choices = ['light_kick', 'heavy_kick', 'light_kick', 'light_punch']
+                else:
+                    # 随机选择，但轻型攻击更常见
+                    attack_choices = ['light_punch', 'light_kick', 'heavy_punch', 'heavy_kick']
                     
-                    # 攻击后后退
-                    back_direction = 'left' if ai_state['x'] > player_state['x'] else 'right'
-                    self.next_action_queue.append((lambda: self._move(back_direction), 0.6))
+                attack_type = random.choice(attack_choices)
+                self.next_action_queue.append((lambda: self._attack(attack_type), 0.4))
+                
+                # 攻击后后退
+                back_direction = 'left' if ai_state['x'] > player_state['x'] else 'right'
+                self.next_action_queue.append((lambda: self._move(back_direction), 0.6))
             else:
-                # 在理想距离，直接攻击
-                attack_type = random.choice(['light_punch', 'heavy_punch', 'light_kick', 'heavy_kick'])
+                # 在理想距离或强制攻击情况下，直接攻击
+                # 根据角色个性和随机性选择攻击类型
+                if hasattr(self.character, 'name') and 'AI 1' in self.character.name:
+                    # AI 1偏好拳击
+                    attack_choices = ['light_punch', 'heavy_punch', 'light_punch', 'light_kick']
+                elif hasattr(self.character, 'name') and 'AI 2' in self.character.name:
+                    # AI 2偏好腿法
+                    attack_choices = ['light_kick', 'heavy_kick', 'light_kick', 'light_punch']
+                else:
+                    # 随机选择，但轻型攻击更常见
+                    attack_choices = ['light_punch', 'light_kick', 'heavy_punch', 'heavy_kick']
+                    
+                attack_type = random.choice(attack_choices)
                 self._execute_action(lambda: self._attack(attack_type), 0.5)
                 self.last_attack_time = current_time
                 self.attack_count += 1
@@ -257,9 +292,20 @@ class AIController:
         
         if random.random() < move_chance:
             # 随机决定动作：后退、接近或跳跃
+            # 为AI角色分配不同的行为偏好，增加个性差异
+            if hasattr(self.character, 'name') and 'AI 1' in self.character.name:
+                # AI 1更喜欢接近和跳跃
+                weights = [0.5, 0.2, 0.2, 0.1]  # [approach, retreat, jump, idle]
+            elif hasattr(self.character, 'name') and 'AI 2' in self.character.name:
+                # AI 2更喜欢后退和等待
+                weights = [0.3, 0.4, 0.1, 0.2]  # [approach, retreat, jump, idle]
+            else:
+                # 默认权重
+                weights = [0.4, 0.3, 0.2, 0.1]  # [approach, retreat, jump, idle]
+                
             action_type = random.choices(
                 ['approach', 'retreat', 'jump', 'idle'], 
-                weights=[0.4, 0.3, 0.2, 0.1]
+                weights=weights
             )[0]
             
             if action_type == 'approach':

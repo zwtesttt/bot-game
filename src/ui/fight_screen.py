@@ -344,29 +344,66 @@ class FightScreen:
         if self.player2.attack_cooldown > 0:
             self._draw_cooldown_indicator(screen, SCREEN_WIDTH - 350, 75, self.player2.attack_cooldown, self.player2.attack_cooldown_duration, RED)
         
-        # 绘制玩家名称
+        # 绘制玩家名称和血条上方的标签
         if self.ai_vs_ai_mode:
-            p1_name = render_text("AI 1", 36, BLUE)
-            p2_name = render_text("AI 2", 36, RED)
+            # 使用大字体绘制名称，并放在血条正上方
+            p1_name_text = "AI 1"
+            p2_name_text = "AI 2"
+            
+            # 确保名称字符串已设置
+            if hasattr(self.player1, 'name') and self.player1.name:
+                p1_name_text = self.player1.name
+            if hasattr(self.player2, 'name') and self.player2.name:
+                p2_name_text = self.player2.name
+                
+            # 渲染名称文本
+            p1_name = render_text(p1_name_text, 30, BLUE)
+            p2_name = render_text(p2_name_text, 30, RED)
+            
+            # 计算文本位置，使其位于血条上方中央
+            p1_name_rect = p1_name.get_rect(centerx=50+150, bottom=40)  # 血条中心位置
+            p2_name_rect = p2_name.get_rect(centerx=SCREEN_WIDTH-350+150, bottom=40)
+            
+            # 绘制名称
+            screen.blit(p1_name, p1_name_rect)
+            screen.blit(p2_name, p2_name_rect)
             
             # 在AI名称下方显示行为模式
             if self.ai1_controller:
                 behavior1_text = render_text("(进攻型)", 16, BLUE)
-                screen.blit(behavior1_text, (50, 60))
+                behavior1_rect = behavior1_text.get_rect(centerx=p1_name_rect.centerx, top=p1_name_rect.bottom + 2)
+                screen.blit(behavior1_text, behavior1_rect)
             if self.ai_controller:
                 behavior2_text = render_text("(防守型)", 16, RED)
-                screen.blit(behavior2_text, (SCREEN_WIDTH - 350, 60))
+                behavior2_rect = behavior2_text.get_rect(centerx=p2_name_rect.centerx, top=p2_name_rect.bottom + 2)
+                screen.blit(behavior2_text, behavior2_rect)
                 
             # 在顶部添加模式标题
             mode_text = render_text("AI对战AI模式", 24, YELLOW)
             mode_rect = mode_text.get_rect(center=(SCREEN_WIDTH // 2, 20))
             screen.blit(mode_text, mode_rect)
         else:
-            p1_name = render_text("玩家1", 36, BLUE)
-            p2_name = render_text("玩家2" if not self.vsai_mode else "AI", 36, RED)
-        
-        screen.blit(p1_name, (50, 20))
-        screen.blit(p2_name, (SCREEN_WIDTH - 350, 20))
+            # 非AI对战模式的名称显示
+            p1_name_text = "玩家1"
+            p2_name_text = "玩家2" if not self.vsai_mode else "AI"
+            
+            # 确保名称字符串已设置
+            if hasattr(self.player1, 'name') and self.player1.name:
+                p1_name_text = self.player1.name
+            if hasattr(self.player2, 'name') and self.player2.name:
+                p2_name_text = self.player2.name
+                
+            # 渲染名称文本
+            p1_name = render_text(p1_name_text, 30, BLUE)
+            p2_name = render_text(p2_name_text, 30, RED)
+            
+            # 计算文本位置，使其位于血条上方中央
+            p1_name_rect = p1_name.get_rect(centerx=50+150, bottom=40)
+            p2_name_rect = p2_name.get_rect(centerx=SCREEN_WIDTH-350+150, bottom=40)
+            
+            # 绘制名称
+            screen.blit(p1_name, p1_name_rect)
+            screen.blit(p2_name, p2_name_rect)
         
         # 绘制回合时间
         time_text = render_text(f"{int(self.round_time)}", 48, YELLOW)
