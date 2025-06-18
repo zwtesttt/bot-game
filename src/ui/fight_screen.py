@@ -125,6 +125,15 @@ class FightScreen:
         self.damage_created_this_frame = set()  # 跟踪在当前帧已创建的伤害效果
         self.last_effect_cleanup = time.time()  # 上次清理特效的时间
         
+        # 新增：伤害防抖和跟踪系统
+        self.last_damage_time = {
+            self.player1.name: 0,
+            self.player2.name: 0
+        }  # 每个角色上次受伤的时间
+        self.damage_debounce_time = 0.5  # 增加防抖时间，单位秒，两次伤害特效的最小时间间隔
+        self.active_damage_ids = set()  # 当前活跃的伤害ID
+        self.registered_hits = {}  # 记录已经处理的命中 {hit_id: timestamp}
+        
         # 预定义特效颜色
         self.effect_colors = {
             "light_punch": (255, 255, 0, 180),  # 黄色，半透明
@@ -215,7 +224,12 @@ class FightScreen:
         self.player1.update(dt, self.player2)
         self.player2.update(dt, self.player1)
         
-        # 检测攻击和受击，创建视觉特效
+        # 检查和清理特效 - 优化特效限制提高流畅度
+        if len(self.effects) > 5:  # 进一步降低特效上限
+            self._clean_effects()
+            
+        # 执行正常的特效检测和创建
+        # 检测攻击，创建视觉特效
         self._check_attack_effects(self.player1, self.player2, self.p1_last_state, self.p1_last_health)
         self._check_attack_effects(self.player2, self.player1, self.p2_last_state, self.p2_last_health)
         
@@ -225,9 +239,8 @@ class FightScreen:
         # 清空当前帧已创建的伤害效果记录（在每帧结束时重置）
         self.damage_created_this_frame.clear()
         
-        # 每3秒强制清理一次特效，防止特效堆积
-        current_time = time.time()
-        if current_time - self.last_effect_cleanup > 3.0:
+        # 每0.25秒强制清理一次特效，进一步提高流畅性
+        if current_time - self.last_effect_cleanup > 0.25:
             self._clean_effects()
             self.last_effect_cleanup = current_time
         
@@ -523,52 +536,72 @@ class FightScreen:
         """
         from src.characters.character import CharacterState
         
-        # 限制同时存在的特效数量，如果特效太多，不再创建新特效
-        if len(self.effects) > 25:  # 降低特效数量限制（原为50）
+        # 限制同时存在的特效数量
+        if len(self.effects) > 8:  # 限制特效数量
             return
         
-        # 检查攻击特效
+        # 检查攻击特效 - 优化攻击特效的触发时机
         if attacker.state in [CharacterState.LIGHT_PUNCH, CharacterState.HEAVY_PUNCH, 
                              CharacterState.LIGHT_KICK, CharacterState.HEAVY_KICK]:
-            if attacker.state != last_state:  # 状态刚刚变化，创建攻击特效
-                attack_type = attacker.state.name.lower()
+            
+            # 获取攻击动作窗口
+            attack_window = None
+            if hasattr(attacker, 'attack_windows') and attacker.state in attacker.attack_windows:
+                attack_window = attacker.attack_windows[attacker.state]
                 
+            # 计算攻击动画进度
+            attack_progress = None
+            if hasattr(attacker, 'attack_timer') and hasattr(attacker, 'attack_duration'):
+                if attacker.attack_duration > 0:
+                    attack_progress = attacker.attack_timer / attacker.attack_duration
+                    
+            # 检查是否在攻击特效触发窗口内
+            should_create_effect = attacker.state != last_state  # 默认状态变化时触发
+            
+            # 如果有攻击窗口配置，则在窗口开始时创建特效
+            if attack_window and attack_progress is not None:
+                window_start, _ = attack_window
+                # 在攻击窗口开始时创建特效
+                if abs(attack_progress - window_start) < 0.05:  # 允许0.05的误差
+                    should_create_effect = True
+                
+            if should_create_effect:
                 # 确定特效位置（根据攻击者朝向和位置）
                 from src.characters.character import Direction
                 if attacker.direction == Direction.RIGHT:
-                    effect_x = attacker.x + attacker.width
+                    effect_x = attacker.x + attacker.width + 5  # 调整位置
                 else:
-                    effect_x = attacker.x - 30
+                    effect_x = attacker.x - 35  # 调整位置
                 
                 effect_y = attacker.y + 50  # 大约在角色的胸部位置
                 
-                # 创建攻击特效
-                if "punch" in attack_type:
-                    self._create_punch_effect(effect_x, effect_y, attack_type)
-                elif "kick" in attack_type:
-                    self._create_kick_effect(effect_x, effect_y, attack_type)
+                # 创建攻击特效 - 确保不重复创建
+                attack_id = f"{attacker.name}_{attacker.state.name.lower()}_{time.time():.2f}"
+                if attack_id not in self.damage_created_this_frame:
+                    # 创建攻击特效
+                    if "punch" in attacker.state.name.lower():
+                        self._create_punch_effect(effect_x, effect_y, attacker.state.name.lower())
+                    elif "kick" in attacker.state.name.lower():
+                        self._create_kick_effect(effect_x, effect_y, attacker.state.name.lower())
+                    
+                    self.damage_created_this_frame.add(attack_id)
         
-        # 检查受击特效和血量变化
+        # 检查攻击是否命中（血量减少）
         if defender.health < last_health:  # 生命值减少，表示被击中
             # 计算血量变化
             damage = last_health - defender.health
+            current_time = time.time()
             
-            # 使用唯一标识符确保每次攻击只创建一次伤害特效
-            damage_id = f"{defender.name}_{damage}_{time.time():.2f}"
-            if damage_id not in self.damage_created_this_frame:
-                # 在被击中的位置创建受击特效
-                hit_x = defender.x + defender.width // 2
-                hit_y = defender.y + defender.height // 2
-                self._create_hit_effect(hit_x, hit_y)
-                
-                # 在头顶创建血量变化显示
-                self._create_damage_text(defender.x + defender.width // 2, defender.y, damage)
-                
-                # 标记该伤害已创建特效
-                self.damage_created_this_frame.add(damage_id)
-    
+            # 仍然记录伤害ID，用于防止重复处理
+            damage_id = f"{defender.name}_{damage}_{int(current_time*10)}"
+            
+            # 记录最后一次伤害时间和伤害ID（仍然保留此机制以维护游戏逻辑）
+            self.last_damage_time[defender.name] = current_time
+            self.active_damage_ids.add(damage_id)
+            self.damage_created_this_frame.add(damage_id)
+            
     def _create_punch_effect(self, x, y, attack_type):
-        """创建拳击特效
+        """创建拳击特效 - 优化视觉效果
         
         Args:
             x: 特效x坐标
@@ -577,43 +610,63 @@ class FightScreen:
         """
         # 拳击特效是一个快速扩大然后消失的圆形加上冲击波
         is_heavy = "heavy" in attack_type
-        color = self.effect_colors.get(attack_type, (255, 255, 0, 180))
-        size = 15 if is_heavy else 10
-        duration = 0.3 if is_heavy else 0.2
         
-        # 主要冲击圆
+        # 增强颜色对比度和亮度
+        if is_heavy:
+            color = (255, 140, 0, 230)  # 亮橙色，更高不透明度
+        else:
+            color = (255, 255, 0, 210)  # 亮黄色，更高不透明度
+            
+        size = 18 if is_heavy else 12  # 增大初始尺寸
+        duration = 0.35 if is_heavy else 0.25  # 增加持续时间提高可见性
+        
+        # 主要冲击圆 - 使用填充圆增强视觉效果
         self.effects.append({
             "type": "circle",
             "x": x,
             "y": y,
             "color": color,
             "size": size,
-            "max_size": size * (4 if is_heavy else 3),
+            "max_size": size * (5 if is_heavy else 3.5),  # 扩大最大尺寸
             "current_size": size,
             "duration": duration,
-            "time_left": duration
+            "time_left": duration,
+            "filled": True  # 设置为填充圆增强视觉效果
         })
         
-        # 添加冲击线效果 - 重拳特有
-        if is_heavy:
-            for i in range(6):  # 6条冲击线
-                angle = i * (360 / 6)
-                self.effects.append({
-                    "type": "impact_line",
-                    "x": x,
-                    "y": y,
-                    "color": color,
-                    "angle": angle,
-                    "length": 10,
-                    "max_length": 40,
-                    "current_length": 10,
-                    "width": 3,
-                    "duration": duration * 0.8,
-                    "time_left": duration * 0.8
-                })
+        # 添加外轮廓圆增强视觉效果
+        self.effects.append({
+            "type": "circle",
+            "x": x,
+            "y": y,
+            "color": (255, 255, 255, 150),  # 白色轮廓
+            "size": size + 2,
+            "max_size": (size + 2) * (5 if is_heavy else 3.5),
+            "current_size": size + 2,
+            "duration": duration * 0.9,
+            "time_left": duration * 0.9
+        })
+        
+        # 添加冲击线效果 - 重拳和轻拳都添加但样式不同
+        lines_count = 8 if is_heavy else 4
+        for i in range(lines_count):
+            angle = i * (360 / lines_count)
+            self.effects.append({
+                "type": "impact_line",
+                "x": x,
+                "y": y,
+                "color": (255, 255, 255, 200) if is_heavy else (255, 255, 150, 180),
+                "angle": angle,
+                "length": 10,
+                "max_length": 50 if is_heavy else 30,  # 增大冲击线长度
+                "current_length": 10,
+                "width": 3 if is_heavy else 2,
+                "duration": duration * 0.7,
+                "time_left": duration * 0.7
+            })
     
     def _create_kick_effect(self, x, y, attack_type):
-        """创建踢腿特效
+        """创建踢腿特效 - 优化视觉效果
         
         Args:
             x: 特效x坐标
@@ -622,11 +675,17 @@ class FightScreen:
         """
         # 踢腿特效是一个弧形扫过的效果加上冲击粒子
         is_heavy = "heavy" in attack_type
-        color = self.effect_colors.get(attack_type, (0, 255, 255, 180))
-        size = 25 if is_heavy else 20
-        duration = 0.35 if is_heavy else 0.25
         
-        # 弧形轨迹
+        # 增强颜色对比度
+        if is_heavy:
+            color = (255, 0, 0, 220)  # 更鲜艳的红色
+        else:
+            color = (0, 200, 255, 200)  # 更亮的青色
+            
+        size = 28 if is_heavy else 22  # 增大尺寸
+        duration = 0.4 if is_heavy else 0.3  # 增加持续时间
+        
+        # 弧形轨迹 - 更明显的弧线效果
         self.effects.append({
             "type": "arc",
             "x": x,
@@ -635,14 +694,14 @@ class FightScreen:
             "radius": size * 2,
             "start_angle": 0,
             "end_angle": 0,
-            "max_angle": 150 if is_heavy else 120,
-            "width": 6 if is_heavy else 4,
+            "max_angle": 180 if is_heavy else 150,  # 增大弧度
+            "width": 8 if is_heavy else 5,  # 增加线条宽度
             "duration": duration,
             "time_left": duration
         })
         
-        # 添加粒子效果 - 散开的小圆点 - 减少粒子数量
-        particle_count = 6 if is_heavy else 4  # 减少粒子数
+        # 添加粒子效果 - 散开的小圆点，增加数量和尺寸
+        particle_count = 8 if is_heavy else 5
         for i in range(particle_count):
             angle = i * (360 / particle_count)
             distance = size * 1.5
@@ -652,125 +711,32 @@ class FightScreen:
                 "type": "particle",
                 "x": particle_x,
                 "y": particle_y,
-                "velocity_x": math.cos(angle * (math.pi / 180)) * (3 if is_heavy else 2),
-                "velocity_y": math.sin(angle * (math.pi / 180)) * (3 if is_heavy else 2),
-                "color": (*color[:3], 220),
-                "size": 5 if is_heavy else 3,
-                "duration": duration * 0.8,
-                "time_left": duration * 0.8
+                "velocity_x": math.cos(angle * (math.pi / 180)) * (4 if is_heavy else 3),  # 增加速度
+                "velocity_y": math.sin(angle * (math.pi / 180)) * (4 if is_heavy else 3),
+                "color": (*color[:3], 240),  # 提高不透明度
+                "size": 7 if is_heavy else 5,  # 增大粒子尺寸
+                "duration": duration * 0.9,
+                "time_left": duration * 0.9
             })
-    
-    def _create_hit_effect(self, x, y):
-        """创建受击特效
-        
-        Args:
-            x: 特效x坐标
-            y: 特效y坐标
-        """
-        # 受击特效是爆炸星形和冲击波
-        color = self.effect_colors["hit"]
-        duration = 0.3  # 减少持续时间
-        
-        # 主星形爆炸
-        self.effects.append({
-            "type": "hit",
-            "x": x,
-            "y": y,
-            "color": color,
-            "size": 20,
-            "duration": duration,
-            "time_left": duration,
-            "lines": 8  # 减少星形的线数
-        })
-        
-        # 添加冲击波圆圈
-        self.effects.append({
-            "type": "circle",
-            "x": x,
-            "y": y,
-            "color": (255, 255, 255, 180),
-            "size": 10,
-            "max_size": 40,
-            "current_size": 10,
-            "duration": duration * 0.8,
-            "time_left": duration * 0.8
-        })
-        
-        # 添加多个小爆炸粒子 - 减少数量
-        for i in range(3):  # 减少粒子数量
-            offset_x = random.randint(-20, 20)
-            offset_y = random.randint(-20, 20)
-            delay = random.uniform(0, 0.1)  # 减少延迟
-            particle_duration = random.uniform(0.2, 0.25)  # 减少持续时间
-            self.effects.append({
-                "type": "mini_explosion",
-                "x": x + offset_x,
-                "y": y + offset_y,
-                "color": (255, 200, 100, 200),
-                "size": random.randint(5, 10),
-                "duration": particle_duration,
-                "time_left": particle_duration + delay,
-                "delay": delay
-            })
-    
-    def _create_damage_text(self, x, y, damage):
-        """创建血量变化文本特效
-        
-        Args:
-            x: 文本x坐标
-            y: 文本y坐标
-            damage: 伤害值
-        """
-        # 如果伤害显示特效已经太多，限制新特效的创建
-        damage_texts = [e for e in self.effects if e["type"] == "damage_text"]
-        if len(damage_texts) >= 2:  # 降低限制，最多同时显示2个伤害文本
-            return
             
-        # 创建伤害文本特效
-        duration = 0.4  # 减少持续时间
-        
-        # 根据伤害大小调整文本大小和颜色
-        if damage >= 8:  # 重伤害
-            size = 32
-            color = (255, 0, 0, 255)  # 鲜红色
-        elif damage >= 5:  # 中伤害
-            size = 28
-            color = (255, 100, 0, 255)  # 橙红色
-        else:  # 轻伤害
-            size = 24
-            color = (255, 200, 0, 255)  # 黄色
-        
-        # 添加到特效系统
-        self.effects.append({
-            "type": "damage_text",
-            "x": x,
-            "y": y - 30,  # 头顶上方
-            "text": f"-{damage}",
-            "size": size,
-            "color": color,
-            "duration": duration,
-            "time_left": duration,
-            "offset_y": 0,
-            "max_offset": -25  # 减少漂浮距离
-        })
-        
-        # 大幅减少血溅效果粒子数量
-        max_particles = min(2, int(damage/3))  # 最多2个粒子，每3点伤害1个
-        for i in range(max_particles):
-            angle = random.uniform(0, 360)
-            speed = random.uniform(0.6, 1.2)  # 降低速度
-            size = random.uniform(1.5, 2.0)  # 降低大小
+        # 为重踢添加扇形区域效果
+        if is_heavy:
+            # 添加扇形区域指示攻击范围
+            sweep_angle = 120  # 扇形覆盖角度
+            start_angle = -60  # 起始角度（相对于水平线）
+            
             self.effects.append({
-                "type": "blood_particle",
+                "type": "arc",
                 "x": x,
-                "y": y - 20,
-                "velocity_x": math.cos(angle * (math.pi / 180)) * speed,
-                "velocity_y": math.sin(angle * (math.pi / 180)) * speed - 0.8,  # 降低初始向上速度
-                "color": (255, 0, 0, 200),
-                "size": size,
-                "duration": 0.25,  # 减少持续时间
-                "time_left": 0.25,
-                "gravity": 0.15  # 增加重力
+                "y": y,
+                "color": (255, 0, 0, 80),  # 半透明红色
+                "radius": size * 4,
+                "start_angle": start_angle,
+                "end_angle": start_angle,
+                "max_angle": sweep_angle,
+                "width": size * 4,  # 使用较大宽度模拟扇形
+                "duration": duration * 0.6,
+                "time_left": duration * 0.6
             })
     
     def _update_effects(self, dt):
@@ -779,16 +745,32 @@ class FightScreen:
         Args:
             dt: 时间增量（秒）
         """
-        # 如果特效过多，强制移除一些最老的特效
-        if len(self.effects) > 25:  # 降低特效上限
-            # 保留最新的15个特效，删除其他的
-            self.effects = self.effects[-15:]
+        # 如果特效过多，快速清理
+        if len(self.effects) > 8:
+            self.effects = self.effects[-5:]  # 只保留最新的5个特效
+        
+        # 更新所有特效，移除已过期或过旧的特效
+        current_time = time.time()
+        active_damage_ids_to_remove = set()
+        
+        # 清理任何超过0.8秒的特效（减少存活时间）
+        for effect in self.effects[:]:
+            if 'creation_time' in effect and current_time - effect.get('creation_time', current_time) > 0.8:
+                if "damage_id" in effect:
+                    active_damage_ids_to_remove.add(effect["damage_id"])
+                self.effects.remove(effect)
+        
+        # 从活跃ID集合中移除过期的ID
+        self.active_damage_ids -= active_damage_ids_to_remove
         
         # 更新所有特效，移除已过期的特效
         for effect in self.effects[:]:  # 创建副本以便在迭代时修改
             effect["time_left"] -= dt
             
             if effect["time_left"] <= 0:
+                # 如果特效有damage_id，从活跃ID集合中移除其ID
+                if "damage_id" in effect:
+                    active_damage_ids_to_remove.add(effect["damage_id"])
                 self.effects.remove(effect)
                 continue
             
@@ -804,28 +786,19 @@ class FightScreen:
                 # 圆形特效逐渐扩大
                 effect["current_size"] = effect["size"] + (effect["max_size"] - effect["size"]) * progress
                 # 随着时间推移透明度降低
-                effect["color"] = (*effect["color"][:3], int(effect["color"][3] * (1 - progress)))
+                effect["color"] = (*effect["color"][:3], int(effect["color"][3] * (1 - progress * 0.8)))
                 
             elif effect["type"] == "arc":
                 # 弧形特效角度逐渐增加
                 effect["end_angle"] = effect["max_angle"] * progress
                 # 透明度变化
-                effect["color"] = (*effect["color"][:3], int(effect["color"][3] * (1 - progress * 0.5)))
-                
-            elif effect["type"] == "hit":
-                # 受击特效大小先增加后减小
-                if progress < 0.5:
-                    effect["size"] = 20 + 30 * (progress * 2)  # 增加最大尺寸
-                else:
-                    effect["size"] = 50 - 50 * ((progress - 0.5) * 2)
-                # 透明度变化
                 effect["color"] = (*effect["color"][:3], int(effect["color"][3] * (1 - progress * 0.7)))
-            
+                
             elif effect["type"] == "impact_line":
                 # 冲击线逐渐延长
                 effect["current_length"] = effect["length"] + (effect["max_length"] - effect["length"]) * progress
                 # 透明度变化
-                effect["color"] = (*effect["color"][:3], int(effect["color"][3] * (1 - progress)))
+                effect["color"] = (*effect["color"][:3], int(effect["color"][3] * (1 - progress * 0.9)))
             
             elif effect["type"] in ["particle", "blood_particle"]:
                 # 更新粒子位置
@@ -833,18 +806,21 @@ class FightScreen:
                 effect["y"] += effect["velocity_y"]
                 if effect["type"] == "blood_particle":
                     effect["velocity_y"] += effect["gravity"]
-                # 透明度变化
-                effect["color"] = (*effect["color"][:3], int(effect["color"][3] * (1 - progress)))
+                # 透明度变化 - 加快衰减
+                effect["color"] = (*effect["color"][:3], int(effect["color"][3] * (1 - progress * 1.1)))
             
-            elif effect["type"] in ["text", "damage_text"]:
+            elif effect["type"] == "text":
                 # 文字特效上升
                 effect["offset_y"] = effect["max_offset"] * progress
-                # 透明度变化
-                if progress < 0.2:
-                    alpha = 255  # 前20%时间保持完全不透明
+                # 透明度变化 - 加快衰减
+                if progress < 0.1:
+                    alpha = 255  # 前10%时间保持完全不透明
                 else:
-                    alpha = 255 * (1 - ((progress - 0.2) / 0.8))  # 后80%时间逐渐淡出
+                    alpha = 255 * (1 - ((progress - 0.1) / 0.9))  # 后90%时间逐渐淡出
                 effect["color"] = (*effect["color"][:3], int(alpha))
+                
+        # 从活跃ID集合中移除过期的ID
+        self.active_damage_ids -= active_damage_ids_to_remove
     
     def _render_effects(self, screen):
         """渲染所有特效
@@ -859,73 +835,83 @@ class FightScreen:
         # 创建一个透明的Surface用于绘制特效
         effect_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
         
-        # 对特效进行分组处理，减少渲染次数
+        # 先按类型分组，确保正确的渲染顺序
+        circle_effects = []
+        arc_effects = []
+        line_effects = []
         particle_effects = []
         text_effects = []
-        other_effects = []
         
         for effect in self.effects:
-            # 跳过延迟中的效果
-            if "delay" in effect and effect["time_left"] > effect["duration"]:
+            if effect["type"] == "circle":
+                circle_effects.append(effect)
+            elif effect["type"] == "arc":
+                arc_effects.append(effect)
+            elif effect["type"] == "impact_line":
+                line_effects.append(effect)
+            elif effect["type"] in ["particle", "blood_particle"]:
+                particle_effects.append(effect)
+            elif effect["type"] == "text":
+                text_effects.append(effect)
+        
+        # 渲染圆形特效
+        for effect in circle_effects:
+            if effect.get("delay", 0) > 0 and effect["time_left"] > effect["duration"]:
+                continue  # 跳过延迟效果
+                
+            pygame.draw.circle(
+                effect_surface,
+                effect["color"],
+                (int(effect["x"]), int(effect["y"])),
+                int(effect["current_size"]),
+                0 if effect.get("filled", False) else 2
+            )
+        
+        # 渲染弧形特效
+        for effect in arc_effects:
+            if effect.get("delay", 0) > 0 and effect["time_left"] > effect["duration"]:
                 continue
                 
-            # 按类型分组
-            if effect["type"] in ["particle", "blood_particle"]:
-                particle_effects.append(effect)
-            elif effect["type"] in ["text", "damage_text"]:
-                text_effects.append(effect)
-            else:
-                other_effects.append(effect)
+            start_angle = math.radians(effect.get("start_angle", 0))
+            end_angle = math.radians(effect.get("end_angle", 90))
+            pygame.draw.arc(
+                effect_surface,
+                effect["color"],
+                (int(effect["x"] - effect["radius"]), int(effect["y"] - effect["radius"]),
+                 int(effect["radius"] * 2), int(effect["radius"] * 2)),
+                start_angle,
+                end_angle,
+                effect.get("width", 2)
+            )
         
-        # 先绘制非粒子和文本特效
-        for effect in other_effects:
-            if effect["type"] == "circle":
-                pygame.draw.circle(effect_surface, effect["color"], 
-                                  (int(effect["x"]), int(effect["y"])), 
-                                  int(effect["current_size"]))
+        # 渲染冲击线特效
+        for effect in line_effects:
+            if effect.get("delay", 0) > 0 and effect["time_left"] > effect["duration"]:
+                continue
                 
-            elif effect["type"] == "arc":
-                # 弧形特效
-                pygame.draw.arc(effect_surface, effect["color"],
-                               (effect["x"] - effect["radius"], effect["y"] - effect["radius"],
-                                effect["radius"] * 2, effect["radius"] * 2),
-                               effect["start_angle"] * (math.pi / 180),  # 转换为弧度
-                               effect["end_angle"] * (math.pi / 180),
-                               effect["width"])
-                
-            elif effect["type"] == "hit":
-                # 受击特效（星形）
-                center = (int(effect["x"]), int(effect["y"]))
-                size = int(effect["size"])
-                lines = effect["lines"]
-                
-                for i in range(lines):
-                    angle = (360 / lines) * i
-                    rad = angle * (math.pi / 180)
-                    end_x = center[0] + int(size * 1.5 * math.cos(rad))
-                    end_y = center[1] + int(size * 1.5 * math.sin(rad))
-                    pygame.draw.line(effect_surface, effect["color"], center, (end_x, end_y), 3)
-                
-                # 添加中心圆
-                pygame.draw.circle(effect_surface, effect["color"], center, size // 2)
-            
-            elif effect["type"] == "impact_line":
-                # 冲击线效果
-                start_x, start_y = effect["x"], effect["y"]
-                angle_rad = effect["angle"] * (math.pi / 180)
-                end_x = start_x + effect["current_length"] * math.cos(angle_rad)
-                end_y = start_y + effect["current_length"] * math.sin(angle_rad)
-                
-                pygame.draw.line(effect_surface, effect["color"], 
-                                (int(start_x), int(start_y)), 
-                                (int(end_x), int(end_y)), 
-                                effect["width"])
+            angle_rad = math.radians(effect["angle"])
+            end_x = effect["x"] + effect["current_length"] * math.cos(angle_rad)
+            end_y = effect["y"] + effect["current_length"] * math.sin(angle_rad)
+            pygame.draw.line(
+                effect_surface,
+                effect["color"],
+                (int(effect["x"]), int(effect["y"])),
+                (int(end_x), int(end_y)),
+                effect.get("width", 2)
+            )
         
-        # 绘制所有粒子特效
+        # 渲染粒子特效
         for effect in particle_effects:
-            pygame.draw.circle(effect_surface, effect["color"], 
-                              (int(effect["x"]), int(effect["y"])), 
-                              int(effect["size"]))
+            if effect.get("delay", 0) > 0 and effect["time_left"] > effect["duration"]:
+                continue
+                
+            # 简单粒子就是小圆
+            pygame.draw.circle(
+                effect_surface,
+                effect["color"],
+                (int(effect["x"]), int(effect["y"])),
+                effect["size"]
+            )
         
         # 最后绘制所有文本特效
         for effect in text_effects:
@@ -933,39 +919,54 @@ class FightScreen:
                 # 普通文本特效
                 font = pygame.font.SysFont(None, effect["size"])
                 text_surf = font.render(effect["text"], True, effect["color"])
-                text_rect = text_surf.get_rect(center=(effect["x"], effect["y"] + effect["offset_y"]))
-                effect_surface.blit(text_surf, text_rect)
-            elif effect["type"] == "damage_text":
-                # 伤害文本特效
-                text = effect["text"]
-                size = effect["size"]
-                color = effect["color"]
-                text_surf = render_text(text, size, color)
-                text_rect = text_surf.get_rect(center=(effect["x"], effect["y"] + effect["offset_y"]))
+                text_rect = text_surf.get_rect(center=(int(effect["x"]), int(effect["y"] + effect["offset_y"])))
                 
-                # 简化描边，只使用一个背景
-                shadow_surf = render_text(text, size, (0, 0, 0, color[3] // 2))
-                shadow_rect = shadow_surf.get_rect(center=(effect["x"] + 2, effect["y"] + effect["offset_y"] + 2))
+                # 添加简单的文本阴影增强可读性
+                shadow_surf = font.render(effect["text"], True, (0, 0, 0, effect["color"][3] // 2))
+                shadow_rect = shadow_surf.get_rect(center=(int(effect["x"]) + 2, int(effect["y"] + effect["offset_y"]) + 2))
                 effect_surface.blit(shadow_surf, shadow_rect)
                 
                 effect_surface.blit(text_surf, text_rect)
         
         # 将特效Surface绘制到屏幕上
         screen.blit(effect_surface, (0, 0))
-
+        
     def _clean_effects(self):
-        """定期清理特效，保留最新的几个"""
-        # 保留最新的特效，删除老旧特效
-        if len(self.effects) > 10:
-            # 按类型保留特效
-            damage_texts = [e for e in self.effects if e["type"] == "damage_text"]
-            if len(damage_texts) > 2:  # 最多保留2个伤害文本
-                # 保留最新的两个
-                damage_texts.sort(key=lambda x: x["time_left"], reverse=True)
-                to_keep = damage_texts[:2]
-                # 从effects中删除不在to_keep列表中的伤害文本
-                self.effects = [e for e in self.effects if e["type"] != "damage_text" or e in to_keep]
+        """清理过期的特效"""
+        # 记录当前时间，用于删除过时的特效
+        current_time = time.time()
+        effects_to_remove = []
+        active_damage_ids_to_remove = set()
+        
+        # 按创建时间排序，保留最新的特效
+        effects_with_time = []
+        
+        # 为每个特效添加创建时间（如果没有）
+        for i, effect in enumerate(self.effects):
+            if 'creation_time' not in effect:
+                self.effects[i]['creation_time'] = current_time
             
-            # 限制其他类型的特效数量
-            if len(self.effects) > 15:  # 如果总数还是太多
-                self.effects = self.effects[-15:]  # 只保留最新的15个
+            effects_with_time.append((effect, effect.get('creation_time', current_time)))
+        
+        # 按创建时间排序
+        effects_with_time.sort(key=lambda x: x[1], reverse=True)  # 最新的在前面
+        
+        # 保留最新的5个特效，进一步提高流畅性
+        if len(effects_with_time) > 5:
+            effects_to_keep = [item[0] for item in effects_with_time[:5]]
+            
+            # 找出要删除的特效
+            for effect in self.effects:
+                if effect not in effects_to_keep:
+                    effects_to_remove.append(effect)
+                    # 如果要删除的特效有damage_id，也从活跃ID集合中移除
+                    if "damage_id" in effect:
+                        active_damage_ids_to_remove.add(effect["damage_id"])
+        
+        # 移除标记的特效
+        for effect in effects_to_remove:
+            if effect in self.effects:
+                self.effects.remove(effect)
+        
+        # 从活跃ID集合中移除已删除特效的ID
+        self.active_damage_ids -= active_damage_ids_to_remove
