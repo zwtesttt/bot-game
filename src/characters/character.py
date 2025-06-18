@@ -57,6 +57,10 @@ class Character(pygame.sprite.Sprite):
         self.animation_speed = 0.2
         self.animation_timer = 0
         
+        # 受击状态恢复
+        self.hit_recovery_timer = 0
+        self.hit_stun_duration = 0.5  # 受击硬直时间，0.5秒
+        
         # 加载图像
         self.sprites = self._load_sprites()
         self.image = self.sprites[self.state][self.direction][0]
@@ -92,6 +96,15 @@ class Character(pygame.sprite.Sprite):
             dt: 时间增量（秒）
             opponent: 对手角色
         """
+        # 处理受击状态恢复
+        if self.state == CharacterState.HIT:
+            self.hit_recovery_timer += dt
+            if self.hit_recovery_timer >= self.hit_stun_duration:
+                self.state = CharacterState.IDLE
+                self.hit_recovery_timer = 0
+                self.animation_frame = 0
+                self.animation_timer = 0
+        
         # 更新朝向 - 确保AI角色始终朝向对方
         if hasattr(self, 'name') and self.name.startswith('AI') and not self.is_attacking:
             # 如果是AI角色且没有在攻击中，强制朝向对方
@@ -193,6 +206,11 @@ class Character(pygame.sprite.Sprite):
                     if self.animation_frame < len(sprite_list) - 1:
                         self.animation_frame += 1
                     # 否则保持在最后一帧，直到状态改变
+                    elif self.state == CharacterState.HIT:
+                        # HIT状态动画播放完毕后，恢复为IDLE状态
+                        self.state = CharacterState.IDLE
+                        self.animation_frame = 0
+                        self.animation_timer = 0
                 else:
                     # 对于其他动画，循环播放
                     self.animation_frame = (self.animation_frame + 1) % len(sprite_list)
@@ -510,6 +528,16 @@ class Character(pygame.sprite.Sprite):
             # 重置动画帧，避免显示多个小人
             self.animation_frame = 0
             self.animation_timer = 0
+            # 重置受击恢复计时器
+            self.hit_recovery_timer = 0
+            
+            # 添加击退效果
+            knockback_force = 8.0 if damage >= 3 else 4.0
+            # 根据攻击方向决定击退方向
+            if self.direction == Direction.RIGHT:
+                self.vel_x = -knockback_force  # 向左击退
+            else:
+                self.vel_x = knockback_force   # 向右击退
             
             # 检查是否被击败
             if self.health <= 0:

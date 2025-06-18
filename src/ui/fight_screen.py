@@ -122,6 +122,8 @@ class FightScreen:
         
         # 特效系统
         self.effects = []  # 存储活跃的特效
+        self.damage_created_this_frame = set()  # 跟踪在当前帧已创建的伤害效果
+        self.last_effect_cleanup = time.time()  # 上次清理特效的时间
         
         # 预定义特效颜色
         self.effect_colors = {
@@ -219,6 +221,15 @@ class FightScreen:
         
         # 更新特效
         self._update_effects(dt)
+        
+        # 清空当前帧已创建的伤害效果记录（在每帧结束时重置）
+        self.damage_created_this_frame.clear()
+        
+        # 每3秒强制清理一次特效，防止特效堆积
+        current_time = time.time()
+        if current_time - self.last_effect_cleanup > 3.0:
+            self._clean_effects()
+            self.last_effect_cleanup = current_time
         
         # 保存当前状态用于下一帧比较
         self.p1_last_state = self.player1.state
@@ -542,13 +553,19 @@ class FightScreen:
             # 计算血量变化
             damage = last_health - defender.health
             
-            # 在被击中的位置创建受击特效
-            hit_x = defender.x + defender.width // 2
-            hit_y = defender.y + defender.height // 2
-            self._create_hit_effect(hit_x, hit_y)
-            
-            # 在头顶创建血量变化显示
-            self._create_damage_text(defender.x + defender.width // 2, defender.y, damage)
+            # 使用唯一标识符确保每次攻击只创建一次伤害特效
+            damage_id = f"{defender.name}_{damage}_{time.time():.2f}"
+            if damage_id not in self.damage_created_this_frame:
+                # 在被击中的位置创建受击特效
+                hit_x = defender.x + defender.width // 2
+                hit_y = defender.y + defender.height // 2
+                self._create_hit_effect(hit_x, hit_y)
+                
+                # 在头顶创建血量变化显示
+                self._create_damage_text(defender.x + defender.width // 2, defender.y, damage)
+                
+                # 标记该伤害已创建特效
+                self.damage_created_this_frame.add(damage_id)
     
     def _create_punch_effect(self, x, y, attack_type):
         """创建拳击特效
@@ -594,21 +611,6 @@ class FightScreen:
                     "duration": duration * 0.8,
                     "time_left": duration * 0.8
                 })
-        
-        # 添加文字特效
-        text = "重拳!" if is_heavy else "拳!"
-        self.effects.append({
-            "type": "text",
-            "x": x + 20,
-            "y": y - 20,
-            "text": text,
-            "size": 24 if is_heavy else 20,
-            "color": (255, 255, 255, 255),
-            "duration": duration * 1.5,
-            "time_left": duration * 1.5,
-            "offset_y": 0,
-            "max_offset": -30
-        })
     
     def _create_kick_effect(self, x, y, attack_type):
         """创建踢腿特效
@@ -639,9 +641,10 @@ class FightScreen:
             "time_left": duration
         })
         
-        # 添加粒子效果 - 散开的小圆点
-        for i in range(8 if is_heavy else 5):
-            angle = i * (360 / (8 if is_heavy else 5))
+        # 添加粒子效果 - 散开的小圆点 - 减少粒子数量
+        particle_count = 6 if is_heavy else 4  # 减少粒子数
+        for i in range(particle_count):
+            angle = i * (360 / particle_count)
             distance = size * 1.5
             particle_x = x + distance * math.cos(angle * (math.pi / 180))
             particle_y = y + distance * math.sin(angle * (math.pi / 180))
@@ -656,21 +659,6 @@ class FightScreen:
                 "duration": duration * 0.8,
                 "time_left": duration * 0.8
             })
-        
-        # 添加文字特效
-        text = "重踢!" if is_heavy else "踢!"
-        self.effects.append({
-            "type": "text",
-            "x": x + 20,
-            "y": y - 20,
-            "text": text,
-            "size": 24 if is_heavy else 20,
-            "color": (255, 255, 255, 255),
-            "duration": duration * 1.5,
-            "time_left": duration * 1.5,
-            "offset_y": 0,
-            "max_offset": -30
-        })
     
     def _create_hit_effect(self, x, y):
         """创建受击特效
@@ -681,7 +669,7 @@ class FightScreen:
         """
         # 受击特效是爆炸星形和冲击波
         color = self.effect_colors["hit"]
-        duration = 0.4
+        duration = 0.3  # 减少持续时间
         
         # 主星形爆炸
         self.effects.append({
@@ -692,7 +680,7 @@ class FightScreen:
             "size": 20,
             "duration": duration,
             "time_left": duration,
-            "lines": 10  # 增加星形的线数
+            "lines": 8  # 减少星形的线数
         })
         
         # 添加冲击波圆圈
@@ -708,12 +696,12 @@ class FightScreen:
             "time_left": duration * 0.8
         })
         
-        # 添加多个小爆炸粒子
-        for i in range(6):
+        # 添加多个小爆炸粒子 - 减少数量
+        for i in range(3):  # 减少粒子数量
             offset_x = random.randint(-20, 20)
             offset_y = random.randint(-20, 20)
-            delay = random.uniform(0, 0.2)
-            particle_duration = random.uniform(0.2, 0.3)
+            delay = random.uniform(0, 0.1)  # 减少延迟
+            particle_duration = random.uniform(0.2, 0.25)  # 减少持续时间
             self.effects.append({
                 "type": "mini_explosion",
                 "x": x + offset_x,
@@ -724,20 +712,6 @@ class FightScreen:
                 "time_left": particle_duration + delay,
                 "delay": delay
             })
-        
-        # 添加"啪!"文字效果
-        self.effects.append({
-            "type": "text",
-            "x": x,
-            "y": y - 30,
-            "text": "啪!",
-            "size": 28,
-            "color": (255, 0, 0, 255),
-            "duration": duration * 1.5,
-            "time_left": duration * 1.5,
-            "offset_y": 0,
-            "max_offset": -20
-        })
     
     def _create_damage_text(self, x, y, damage):
         """创建血量变化文本特效
@@ -749,11 +723,11 @@ class FightScreen:
         """
         # 如果伤害显示特效已经太多，限制新特效的创建
         damage_texts = [e for e in self.effects if e["type"] == "damage_text"]
-        if len(damage_texts) >= 3:  # 限制最多同时显示3个伤害文本
+        if len(damage_texts) >= 2:  # 降低限制，最多同时显示2个伤害文本
             return
             
         # 创建伤害文本特效
-        duration = 0.5  # 大幅减少持续时间（原为0.8）
+        duration = 0.4  # 减少持续时间
         
         # 根据伤害大小调整文本大小和颜色
         if damage >= 8:  # 重伤害
@@ -777,26 +751,26 @@ class FightScreen:
             "duration": duration,
             "time_left": duration,
             "offset_y": 0,
-            "max_offset": -30  # 再次减少漂浮距离（原为-40）
+            "max_offset": -25  # 减少漂浮距离
         })
         
         # 大幅减少血溅效果粒子数量
-        max_particles = min(3, int(damage/2))  # 最多3个粒子，每2点伤害1个粒子
+        max_particles = min(2, int(damage/3))  # 最多2个粒子，每3点伤害1个
         for i in range(max_particles):
             angle = random.uniform(0, 360)
-            speed = random.uniform(0.8, 1.5)  # 进一步降低速度范围（原为1-2）
-            size = random.uniform(1.5, 2.5)  # 进一步降低大小范围（原为2-3）
+            speed = random.uniform(0.6, 1.2)  # 降低速度
+            size = random.uniform(1.5, 2.0)  # 降低大小
             self.effects.append({
                 "type": "blood_particle",
                 "x": x,
                 "y": y - 20,
                 "velocity_x": math.cos(angle * (math.pi / 180)) * speed,
-                "velocity_y": math.sin(angle * (math.pi / 180)) * speed - 1.0,  # 降低初始向上速度（原为-1.5）
+                "velocity_y": math.sin(angle * (math.pi / 180)) * speed - 0.8,  # 降低初始向上速度
                 "color": (255, 0, 0, 200),
                 "size": size,
-                "duration": 0.3,  # 减少持续时间（原为0.5）
-                "time_left": 0.3,
-                "gravity": 0.1
+                "duration": 0.25,  # 减少持续时间
+                "time_left": 0.25,
+                "gravity": 0.15  # 增加重力
             })
     
     def _update_effects(self, dt):
@@ -806,9 +780,9 @@ class FightScreen:
             dt: 时间增量（秒）
         """
         # 如果特效过多，强制移除一些最老的特效
-        if len(self.effects) > 40:  # 降低特效上限（原为100）
-            # 保留最新的20个特效，删除其他的（原为50）
-            self.effects = self.effects[-20:]
+        if len(self.effects) > 25:  # 降低特效上限
+            # 保留最新的15个特效，删除其他的
+            self.effects = self.effects[-15:]
         
         # 更新所有特效，移除已过期的特效
         for effect in self.effects[:]:  # 创建副本以便在迭代时修改
@@ -978,3 +952,20 @@ class FightScreen:
         
         # 将特效Surface绘制到屏幕上
         screen.blit(effect_surface, (0, 0))
+
+    def _clean_effects(self):
+        """定期清理特效，保留最新的几个"""
+        # 保留最新的特效，删除老旧特效
+        if len(self.effects) > 10:
+            # 按类型保留特效
+            damage_texts = [e for e in self.effects if e["type"] == "damage_text"]
+            if len(damage_texts) > 2:  # 最多保留2个伤害文本
+                # 保留最新的两个
+                damage_texts.sort(key=lambda x: x["time_left"], reverse=True)
+                to_keep = damage_texts[:2]
+                # 从effects中删除不在to_keep列表中的伤害文本
+                self.effects = [e for e in self.effects if e["type"] != "damage_text" or e in to_keep]
+            
+            # 限制其他类型的特效数量
+            if len(self.effects) > 15:  # 如果总数还是太多
+                self.effects = self.effects[-15:]  # 只保留最新的15个
