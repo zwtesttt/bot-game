@@ -89,16 +89,16 @@ class Character(pygame.sprite.Sprite):
         self.attack_timer = 0
         self.attack_duration = 0
         self.attack_cooldown = 0
-        self.attack_cooldown_duration = 0.85  # 进一步减少攻击冷却时间提高连招流畅感
+        self.attack_cooldown_duration = 0.6  # 原来是0.85，减少了冷却时间
         self.attack_hitbox = pygame.Rect(0, 0, 0, 0)
         self.has_hit_opponent = False  # 标记当前攻击是否已经命中对手
         
         # 攻击伤害配置
         self.attack_damages = {
-            CharacterState.LIGHT_PUNCH: 2,
-            CharacterState.HEAVY_PUNCH: 3,
-            CharacterState.LIGHT_KICK: 2,
-            CharacterState.HEAVY_KICK: 4
+            CharacterState.LIGHT_PUNCH: 4,  # 原来是2
+            CharacterState.HEAVY_PUNCH: 6,  # 原来是3
+            CharacterState.LIGHT_KICK: 4,   # 原来是2
+            CharacterState.HEAVY_KICK: 8    # 原来是4
         }
         
         # 音效属性（默认为None，子类可以重写）
@@ -428,7 +428,7 @@ class Character(pygame.sprite.Sprite):
         if not self.is_attacking and self.attack_cooldown <= 0 and self.state not in [CharacterState.JUMPING, CharacterState.FALLING, CharacterState.DEFEATED]:
             self.is_attacking = True
             self.attack_timer = 0
-            self.attack_duration = 0.22  # 进一步缩短攻击持续时间，增加流畅度
+            self.attack_duration = 0.18  # 原来是0.22，减少了持续时间
             self.state = CharacterState.LIGHT_PUNCH
             self.has_hit_opponent = False  # 重置命中标记
             # 重置动画帧，避免显示多个小人
@@ -444,7 +444,7 @@ class Character(pygame.sprite.Sprite):
         if not self.is_attacking and self.attack_cooldown <= 0 and self.state not in [CharacterState.JUMPING, CharacterState.FALLING, CharacterState.DEFEATED]:
             self.is_attacking = True
             self.attack_timer = 0
-            self.attack_duration = 0.38  # 调整持续时间
+            self.attack_duration = 0.30  # 原来是0.38，减少了持续时间
             self.state = CharacterState.HEAVY_PUNCH
             self.has_hit_opponent = False  # 重置命中标记
             # 重置动画帧，避免显示多个小人
@@ -460,7 +460,7 @@ class Character(pygame.sprite.Sprite):
         if not self.is_attacking and self.attack_cooldown <= 0 and self.state not in [CharacterState.JUMPING, CharacterState.FALLING, CharacterState.DEFEATED]:
             self.is_attacking = True
             self.attack_timer = 0
-            self.attack_duration = 0.22  # 进一步缩短攻击持续时间，增加流畅度
+            self.attack_duration = 0.18  # 原来是0.22，减少了持续时间
             self.state = CharacterState.LIGHT_KICK
             self.has_hit_opponent = False  # 重置命中标记
             # 重置动画帧，避免显示多个小人
@@ -476,7 +476,7 @@ class Character(pygame.sprite.Sprite):
         if not self.is_attacking and self.attack_cooldown <= 0 and self.state not in [CharacterState.JUMPING, CharacterState.FALLING, CharacterState.DEFEATED]:
             self.is_attacking = True
             self.attack_timer = 0
-            self.attack_duration = 0.38  # 调整持续时间
+            self.attack_duration = 0.30  # 原来是0.38，减少了持续时间
             self.state = CharacterState.HEAVY_KICK
             self.has_hit_opponent = False  # 重置命中标记
             # 重置动画帧，避免显示多个小人
@@ -497,33 +497,33 @@ class Character(pygame.sprite.Sprite):
         
         # 针对不同攻击类型优化判定框
         if self.state == CharacterState.LIGHT_PUNCH:
-            attack_width = 70  # 进一步增大判定框
+            attack_width = 80  # 原来是70，增加攻击范围
             attack_height = 50
-            attack_offset_y = 35  # 调整高度使其更加准确
+            attack_offset_y = 35
         elif self.state == CharacterState.HEAVY_PUNCH:
-            attack_width = 85
+            attack_width = 95  # 原来是85，增加攻击范围
             attack_height = 65
-            attack_offset_y = 30  # 调整高度使其更加准确
+            attack_offset_y = 30
         elif self.state == CharacterState.LIGHT_KICK:
-            attack_width = 80
+            attack_width = 90  # 原来是80，增加攻击范围
             attack_height = 40
             attack_offset_y = 65
         elif self.state == CharacterState.HEAVY_KICK:
-            attack_width = 100  # 重踢攻击范围最大
+            attack_width = 110  # 原来是100，增加攻击范围
             attack_height = 50
             attack_offset_y = 60
         
-        # 根据朝向设置判定框位置
+        # 修改判定框位置计算逻辑，保持方向一致性
         if self.direction == Direction.RIGHT:
-            attack_offset_x = self.width - 20  # 判定框位置
+            attack_offset_x = self.width - 10  # 原来是20，增加向右的判定距离
             self.attack_hitbox = pygame.Rect(
                 self.x + attack_offset_x, 
                 self.y + attack_offset_y, 
                 attack_width, 
                 attack_height
             )
-        else:
-            attack_offset_x = -attack_width + 20  # 判定框位置
+        else:  # 向左方向
+            attack_offset_x = -attack_width + 10  # 原来是20，增加向左的判定距离
             self.attack_hitbox = pygame.Rect(
                 self.x + attack_offset_x, 
                 self.y + attack_offset_y, 
